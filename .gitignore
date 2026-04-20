@@ -1,0 +1,7 @@
+__pycache__/
+*.pyc
+.ipynb_checkpoints/
+results/
+figs/
+notebooks/icepack-tutorials/
+.pytest_cache/
