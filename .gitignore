@@ -1,3 +1,38 @@
+# macOS
+.DS_Store
+.Trash-*/
+
+# Generated experiment outputs
+results/
+figs/
+data/
+
+# Exclude notebooks and Icepack material
+notebooks/
+*.ipynb
+.ipynb_checkpoints/
+
+# Scientific-computing output
+*.nc
+*.h5
+*.hdf5
+*.xdmf
+*.bp
+*.pvd
+*.vtu
+*.pvtu
+*.npy
+*.npz
+*.pkl
+
+# Generated/package files
+*.egg-info/
+*.bak
+
+# Local configuration
+.env
+.env.*
+
 # Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[codz]
