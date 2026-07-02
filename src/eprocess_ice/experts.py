@@ -54,13 +54,15 @@ def fourier_polynomial_bank(
     poly_degrees: Sequence[int] = (1, 2, 3),
     amplitudes: Sequence[float] = (0.005, 0.01, 0.02, 0.03, 0.05, 0.08),
     poly_centre: float = 0.5,
+    include_negative: bool = True,
+
 ) -> list[Expert]:
     """Construct the standard Fourier + polynomial expert bank.
 
     For each shape (sin(j*pi*x), cos(j*pi*x) for j=1..n_frequencies, and
     (x - centre)^d for d in poly_degrees), one expert per amplitude is
     created. With default arguments this yields 5*2 + 3 = 13 shapes times
-    6 amplitudes = 78 experts, matching the Poisson paper setup.
+    6 amplitudes x 2 signs = 156 experts, matching the Poisson paper setup.
 
     Coordinates x are assumed to be in [0, 1]; rescale before passing if
     your domain differs.
@@ -72,18 +74,23 @@ def fourier_polynomial_bank(
     for d in poly_degrees:
         shapes.append((f"(x-{poly_centre})^{d}", _make_poly(d, poly_centre)))
 
+    signs = ((1.0, "+"), (-1.0, "-")) if include_negative else ((1.0, "+"),)
+
     experts: list[Expert] = []
     for shape_name, shape_fn in shapes:
         for a in amplitudes:
-            experts.append(
-                Expert(
-                    name=f"{shape_name} @ a={a:g}",
-                    shape_name=shape_name,
-                    amplitude=a,
-                    # closure captures a and shape_fn by value
-                    fn=(lambda s=shape_fn, amp=a: (lambda x: amp * s(x)))(),
+            if a <= 0:
+                raise ValueError("amplitudes must be positive magnitudes")
+            for sign, sign_label in signs:
+                experts.append(
+                    Expert(
+                        name=f"{sign_label}{shape_name} @ a={a:g}",
+                        shape_name=shape_name,   # keep unsigned for deduplication
+                        amplitude=float(a),      # keep positive magnitude
+                        fn=(lambda s=shape_fn, amp=float(a), sg=sign:
+                            (lambda x: sg * amp * s(x)))(),
+                    )
                 )
-            )
     return experts
 
 

@@ -190,7 +190,7 @@ def test_batch_fourier_detects_linear_case():
 
 
 def test_batch_fourier_correction_modes_differ():
-    """Bonferroni over 78 experts is more conservative than over 13 shapes."""
+    """Bonferroni over 78*2 experts is more conservative than over 13 shapes."""
     rng = np.random.default_rng(5)
     x = np.linspace(0, 1, N_NODES)
     u_truth = _interpolated_truth("linear", 0.3, x)  # mild case
@@ -209,7 +209,7 @@ def test_batch_fourier_correction_modes_differ():
     assert abs(res_shapes.statistic - res_all.statistic) < 1e-10
     assert res_shapes.extra["threshold"] < res_all.extra["threshold"]
     assert res_shapes.extra["n_tests"] == 13
-    assert res_all.extra["n_tests"] == 78
+    assert res_all.extra["n_tests"] == 156
 
 
 # ---------------------------------------------------------------------------

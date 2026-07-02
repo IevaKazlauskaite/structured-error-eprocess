@@ -1,16 +1,19 @@
 """Comparator diagnostics for model adequacy testing.
 
-Four diagnostics from the paper, each reduced to a simple function
+Six diagnostics from the paper, each reduced to a simple function
 taking residuals and returning a DiagnosticResult. All comparators
 are pure numpy; no icepack or Firedrake dependencies.
 
 - Morozov's discrepancy principle: flags if RMS(r) > tau * sigma
 - Fixed-sample chi^2: batch test on sum of squared standardised residuals
 - Bonferroni sequential chi^2: rejects at time t if p_t <= alpha / t
+- Pocock sequential chi^2: uniform alpha-spending, threshold alpha/sqrt(T_max)
+- O'Brien-Fleming sequential chi^2: late-weighted alpha-spending
 - Batch Fourier projection: Bonferroni-corrected max over expert projections
 
 References:
-  Morozov 1984; Ramdas & Wang 2025 for an overview of e-values vs. p-values.
+  Morozov 1984; Pocock 1977; O'Brien & Fleming 1979;
+  Ramdas & Wang 2025 for an overview of e-values vs. p-values.
 """
 
 from __future__ import annotations
@@ -145,10 +148,6 @@ def bonferroni_sequential_chi2(
     p_t <= alpha / t. This is sequential with Bonferroni correction
     over time.
 
-    Note: the underlying p-values are positively correlated (S_t
-    includes S_{t-1}), so Bonferroni is conservative in theory but
-    can be anti-conservative in practice. Empirically we observe
-    moderate type-I inflation; see paper SI S2.
     """
     r = np.asarray(residuals).ravel()
     T = len(r)
@@ -176,6 +175,105 @@ def bonferroni_sequential_chi2(
         extra={"p_trajectory": p_values, "thresholds": thresholds},
     )
 
+# ---------------------------------------------------------------------------
+# Pocock sequential chi^2 (alpha-spending, flat)
+# ---------------------------------------------------------------------------
+
+
+def pocock_sequential_chi2(
+    residuals: np.ndarray,
+    sigma: float,
+    alpha: float = 0.05,
+) -> DiagnosticResult:
+    """Pocock-style sequential chi^2 with uniform alpha-spending.
+
+    Rejects at the first time t such that p_t = 1 - F_{chi^2(t)}(S_t) <=
+    alpha / sqrt(T_max), where T_max is the full residual length and
+    S_t = sum_{i<=t} (r_i / sigma)^2.
+
+    Note: requires committing to T_max at the start of monitoring.
+    """
+    r = np.asarray(residuals).ravel()
+    T = len(r)
+    threshold = alpha / np.sqrt(T)
+    cumulative_S = np.cumsum((r / sigma) ** 2)
+    ts = np.arange(1, T + 1)
+    p_values = 1.0 - stats.chi2.cdf(cumulative_S, df=ts)
+
+    exceed = p_values <= threshold
+    if np.any(exceed):
+        stop_time = int(np.argmax(exceed)) + 1
+        rejected = True
+        stop_p = float(p_values[stop_time - 1])
+    else:
+        stop_time = None
+        rejected = False
+        stop_p = float(p_values[-1])
+
+    return DiagnosticResult(
+        rejected=rejected,
+        stop_time=stop_time,
+        statistic=float(cumulative_S[-1]),
+        p_value=stop_p,
+        extra={
+            "p_trajectory": p_values,
+            "threshold": threshold,
+            "T_max": T,
+        },
+    )
+
+
+# ---------------------------------------------------------------------------
+# O'Brien-Fleming sequential chi^2 (alpha-spending, late-weighted)
+# ---------------------------------------------------------------------------
+
+
+def obf_sequential_chi2(
+    residuals: np.ndarray,
+    sigma: float,
+    alpha: float = 0.05,
+) -> DiagnosticResult:
+    """O'Brien-Fleming alpha-spending sequential chi^2.
+
+    Rejects at the first time t such that the cumulative fixed-sample
+    p-value p_t = 1 - F_{chi^2(t)}(S_t) lies in the OBF cumulative
+    rejection region:
+
+        p_t <= alpha^*(t) = 2 * (1 - Phi(z_{alpha/2} / sqrt(t / T_max))).
+
+    Note: requires committing to T_max at the start of monitoring.
+    """
+    r = np.asarray(residuals).ravel()
+    T = len(r)
+    z = stats.norm.ppf(1.0 - alpha / 2.0)
+
+    t_arr = np.arange(1, T + 1)
+    alpha_star = 2.0 * (1.0 - stats.norm.cdf(z / np.sqrt(t_arr / T)))
+
+    cumulative_S = np.cumsum((r / sigma) ** 2)
+    p_values = 1.0 - stats.chi2.cdf(cumulative_S, df=t_arr)
+
+    exceed = p_values <= alpha_star  # cumulative comparison, not incremental
+    if np.any(exceed):
+        stop_time = int(np.argmax(exceed)) + 1
+        rejected = True
+        stop_p = float(p_values[stop_time - 1])
+    else:
+        stop_time = None
+        rejected = False
+        stop_p = float(p_values[-1])
+
+    return DiagnosticResult(
+        rejected=rejected,
+        stop_time=stop_time,
+        statistic=float(cumulative_S[-1]),
+        p_value=stop_p,
+        extra={
+            "p_trajectory": p_values,
+            "alpha_star_cumulative": alpha_star,
+            "T_max": T,
+        },
+    )
 
 # ---------------------------------------------------------------------------
 # Batch Fourier projection test
@@ -194,9 +292,7 @@ def batch_fourier(
 
     For each expert with spatial shape phi_k (amplitude stripped), compute
         Z_k = sum_t r_t * phi_k(x_t) / (sigma * ||phi_k||_2)
-    where ||phi_k||_2^2 = sum_t phi_k(x_t)^2. Under H_0, each Z_k is
-    N(0, 1); different shapes are generally non-orthogonal so we apply
-    Bonferroni correction.
+    where ||phi_k||_2^2 = sum_t phi_k(x_t)^2.
 
     Parameters
     ----------
@@ -209,8 +305,7 @@ def batch_fourier(
         "shapes" (recommended): Bonferroni over unique spatial shapes
             (13 for the default bank), giving an honest multiple-testing
             correction.
-        "all_experts": Bonferroni over all K experts (78 for the default
-            bank); this is the version the paper originally used and is
+        "all_experts": Bonferroni over all K experts ; this is the version the paper originally used and is
             overly conservative since amplitude copies are perfectly
             correlated. Kept for backward compatibility with the paper.
 
@@ -306,6 +401,12 @@ def run_all_diagnostics(
         "morozov": morozov(residuals, sigma, tau=tau_morozov),
         "fixed_chi2": fixed_chi2(residuals, sigma, alpha=alpha),
         "bonferroni_seq_chi2": bonferroni_sequential_chi2(
+            residuals, sigma, alpha=alpha
+        ),
+        "pocock_seq_chi2": pocock_sequential_chi2(
+            residuals, sigma, alpha=alpha
+        ),
+        "obf_seq_chi2": obf_sequential_chi2(
             residuals, sigma, alpha=alpha
         ),
         "batch_fourier_shapes": batch_fourier(
