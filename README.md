@@ -1,4 +1,4 @@
-# Structured Error E-Processes
+# Sequential Structure-Sensitive Residual Diagnostics
 
 Code accompanying the paper *Sequential Structure-Sensitive Residual Diagnostics for PDE Inverse Problems*.
 
